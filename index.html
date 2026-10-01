@@ -166,6 +166,8 @@ dialog.wide{width:min(1280px,calc(100vw - 16px))}
 .stat small{color:var(--ink-2);font-size:13px}
 .cols{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:32px;align-items:start}
 .sec-title{font-size:21px;margin-bottom:10px}
+.chk{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:15px;cursor:pointer}
+.chk input{width:22px;height:22px;flex:0 0 22px;accent-color:var(--accent)}
 .aud{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .aud b{display:inline-block;min-width:26px;padding:2px 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px;text-align:center;font-weight:700;letter-spacing:.3px}
 .aud i{font-style:normal;font-size:11px;color:var(--muted)}
@@ -3322,6 +3324,7 @@ async function renderCargasNR() {
 }
 
 /* ================= Face ID / huella (bloqueo del dispositivo) ================= */
+let pendingBio;
 const bioKey = id => 'codes_bio_' + id, bioNo = id => 'codes_bio_no_' + id;
 const lsGet = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
 const lsSet = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} };
@@ -3364,6 +3367,9 @@ function showBioGate() {
 }
 async function offerBio() {
   if (!perfil || lsGet(bioKey(session.user.id)) || lsGet(bioNo(session.user.id)) || !(await bioSoportado())) return;
+  const quiso = pendingBio; pendingBio = undefined;
+  if (quiso === false) return;
+  if (quiso === true) { try { await bioActivar(session.user, perfil.nombre); toast('Listo: la próxima vez entrás con Face ID / huella.'); return refreshBioBtn(); } catch (_) { /* si el navegador pide un toque, preguntamos abajo */ } }
   const ok = await askConfirm('¿Querés entrar con Face ID o huella la próxima vez?', 'Activar', 'Te pide Face ID o huella al abrir el sistema, sin escribir la contraseña. Lo podés desactivar desde el menú.');
   if (!ok) return lsSet(bioNo(session.user.id), '1');
   try { await bioActivar(session.user, perfil.nombre); toast('Listo: la próxima vez entrás con Face ID / huella.'); refreshBioBtn(); }
@@ -3508,12 +3514,16 @@ function showLogin(mode = 'in', note = '') {
   $('#root').innerHTML = `<div class="gate"><div class="gate-deco" aria-hidden="true">${skyline('gd')}</div><form class="gate-box" id="lg"><img class="logo" src="${LOGO_LIGHT}" alt="CODES Construcciones"><h1>Sistema de gestión</h1><p>${up ? 'Creá tu cuenta para entrar al sistema.' : 'Ingresá con tu cuenta.'}</p>
     <div class="msg err" id="lerr" hidden></div>${note ? `<div class="msg ok">${esc(note)}</div>` : ''}
     ${up ? '<div class="field"><label for="n">Nombre y apellido</label><input id="n" autocomplete="name" required></div>' : ''}
-    <div class="field"><label for="e">Email</label><input id="e" type="email" autocomplete="email" required></div>
-    <div class="field"><label for="p">Contraseña</label><input id="p" type="password" autocomplete="${up ? 'new-password' : 'current-password'}" minlength="6" required></div>
+    <div class="field"><label for="e">Email</label><input id="e" name="username" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+    <div class="field"><label for="p">Contraseña</label><input id="p" name="password" type="password" autocomplete="${up ? 'new-password' : 'current-password'}" minlength="6" required></div>
+    <label class="chk"><input type="checkbox" id="rem"> Recordar usuario y contraseña</label>
+    <label class="chk" id="biolbl" hidden><input type="checkbox" id="biochk"> Activar con Face ID / huella</label>
     ${up ? '<div class="field"><label for="cd">Código de acceso</label><input id="cd" autocomplete="off" required style="text-transform:uppercase"><span class="hint">Te lo da el administrador.</span></div>' : ''}
     <button class="btn" style="width:100%" id="go">${up ? 'Crear cuenta' : 'Entrar'}</button>
     <p style="margin:14px 0 0;text-align:center">${up ? '¿Ya tenés cuenta?' : '¿Primera vez?'} <button type="button" class="link" id="sw">${up ? 'Ingresar' : 'Crear cuenta'}</button></p>
     <p style="margin:8px 0 0;text-align:center"><button type="button" class="link" id="rc">Cambiar proyecto de Supabase</button></p></form></div>`;
+  { const r = lsGet('codes_recordar'), em = lsGet('codes_email'); $('#rem').checked = r !== 'no'; if (!up && em && r !== 'no') { $('#e').value = em; setTimeout(() => $('#p').focus(), 50); } }
+  bioSoportado().then(ok => { if (ok) { $('#biolbl').hidden = false; $('#biochk').checked = true; } });
   $('#sw').onclick = () => showLogin(up ? 'in' : 'up');
   $('#rc').onclick = () => { try { localStorage.removeItem(LS_KEY); } catch (_) {} showConfig(); };
   $('#lg').onsubmit = async e => {
@@ -3521,6 +3531,12 @@ function showLogin(mode = 'in', note = '') {
     const err = t => { const b = $('#lerr'); b.textContent = t; b.hidden = false; };
     $('#go').disabled = true;
     const email = $('#e').value.trim(), password = $('#p').value;
+    const remember = $('#rem').checked, wantBio = !$('#biolbl').hidden && $('#biochk').checked;
+    const guardar = async () => {
+      lsSet('codes_recordar', remember ? 'si' : 'no'); lsSet('codes_email', remember ? email : null);
+      pendingBio = !$('#biolbl').hidden ? wantBio : undefined;
+      if (remember && window.PasswordCredential) { try { await navigator.credentials.store(new PasswordCredential({ id: email, password, name: email })); } catch (_) {} }
+    };
     if (up) {
       const codigo = $('#cd').value.trim().toUpperCase();
       const ok = await sb.rpc('codigo_valido', { p_codigo: codigo });
@@ -3528,13 +3544,13 @@ function showLogin(mode = 'in', note = '') {
       const { data, error } = await sb.auth.signUp({ email, password, options: { data: { nombre: $('#n').value.trim(), codigo } } });
       $('#go').disabled = false;
       if (error) return err(niceError(error));
-      if (data.session) { session = data.session; return enterApp(); }
+      if (data.session) { session = data.session; await guardar(); return enterApp(); }
       return showLogin('in', 'Cuenta creada. Si Supabase te pidió confirmar el email, revisá tu correo y después ingresá.');
     }
     const { data, error } = await sb.auth.signInWithPassword({ email, password });
     $('#go').disabled = false;
     if (error) return err(niceError(error));
-    session = data.session; enterApp();
+    session = data.session; await guardar(); enterApp();
   };
 }
 
