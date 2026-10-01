@@ -3307,6 +3307,65 @@ async function renderCargasNR() {
   load();
 }
 
+/* ================= Face ID / huella (bloqueo del dispositivo) ================= */
+const bioKey = id => 'codes_bio_' + id, bioNo = id => 'codes_bio_no_' + id;
+const lsGet = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const lsSet = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} };
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = t => Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+async function bioSoportado() {
+  try { return !!(window.isSecureContext && window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (_) { return false; }
+}
+async function bioActivar(user, nombre) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { name: 'CODES Construcciones', id: location.hostname },
+    user: { id: new TextEncoder().encode(user.id).slice(0, 64), name: user.email || user.id, displayName: nombre || user.email || 'Usuario' },
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+    timeout: 60000
+  } });
+  lsSet(bioKey(user.id), b64u(cred.rawId)); lsSet(bioNo(user.id), null);
+}
+async function bioVerificar(userId) {
+  const id = lsGet(bioKey(userId)); if (!id) return true;
+  await navigator.credentials.get({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, timeout: 60000, userVerification: 'required',
+    allowCredentials: [{ type: 'public-key', id: unb64u(id), transports: ['internal'] }]
+  } });
+  return true;
+}
+function showBioGate() {
+  const u = session.user;
+  $('#root').innerHTML = `<div class="gate"><div class="gate-deco" aria-hidden="true">${skyline('gd')}</div><div class="gate-box"><img class="logo" src="${LOGO_LIGHT}" alt="CODES Construcciones"><h1>Sistema de gestión</h1><p>Desbloqueá con Face ID o tu huella para entrar.</p>
+    <div class="msg err" id="berr" hidden></div><button class="btn" style="width:100%" id="bgo" type="button">Entrar con Face ID / huella</button>
+    <p style="margin:14px 0 0;text-align:center"><button type="button" class="link" id="bout">Entrar con otra cuenta</button></p></div></div>`;
+  const go = async () => {
+    $('#berr').hidden = true;
+    try { await bioVerificar(u.id); enterApp(); }
+    catch (e) { const b = $('#berr'); b.textContent = e && e.name === 'NotAllowedError' ? 'No se pudo verificar. Probá de nuevo.' : 'No se pudo usar Face ID / huella en este dispositivo. Entrá con otra cuenta o probá de nuevo.'; b.hidden = false; }
+  };
+  $('#bgo').onclick = go; $('#bout').onclick = async () => { await sb.auth.signOut(); showLogin(); };
+  setTimeout(go, 300);
+}
+async function offerBio() {
+  if (!perfil || lsGet(bioKey(session.user.id)) || lsGet(bioNo(session.user.id)) || !(await bioSoportado())) return;
+  const ok = await askConfirm('¿Querés entrar con Face ID o huella la próxima vez?', 'Activar', 'Te pide Face ID o huella al abrir el sistema, sin escribir la contraseña. Lo podés desactivar desde el menú.');
+  if (!ok) return lsSet(bioNo(session.user.id), '1');
+  try { await bioActivar(session.user, perfil.nombre); toast('Listo: la próxima vez entrás con Face ID / huella.'); refreshBioBtn(); }
+  catch (_) { toast('No se pudo activar en este dispositivo.'); }
+}
+async function refreshBioBtn() {
+  const b = $('#biobtn'); if (!b) return;
+  if (!(await bioSoportado())) { b.hidden = true; return; }
+  const on = !!lsGet(bioKey(session.user.id)); b.hidden = false; b.textContent = on ? 'Desactivar Face ID / huella' : 'Activar Face ID / huella';
+  b.onclick = async () => {
+    if (on) { lsSet(bioKey(session.user.id), null); lsSet(bioNo(session.user.id), '1'); toast('Face ID / huella desactivado.'); return refreshBioBtn(); }
+    try { await bioActivar(session.user, perfil.nombre); toast('Activado. La próxima vez entrás con Face ID / huella.'); } catch (_) { toast('No se pudo activar en este dispositivo.'); }
+    refreshBioBtn();
+  };
+}
+
 /* ================= usuarios (solo admin) ================= */
 const ROLES = [['admin', 'Administrador'], ['encargado', 'Encargado (carga y edita)'], ['consulta', 'Consulta (solo ve)']];
 const genCodigo = () => { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', b = new Uint32Array(8); crypto.getRandomValues(b); return [...b].map(x => A[x % A.length]).join(''); };
@@ -3391,14 +3450,14 @@ function showShell() {
   <div class="shell"><aside class="side"><div class="brand"><img src="${LOGO_DARK}" alt="CODES Construcciones"><span>Sistema de gestión</span></div>
     <nav class="nav" aria-label="Secciones">${NAV.filter(([g]) => !['Capital Humano', 'Administración'].includes(g) || perfil.rol === 'admin').map(([g, items]) => (g ? `<h3>${g}</h3>` : '') + items.map(([k, t]) => `<a href="#/${k}">${t}</a>`).join('')).join('')}</nav>
     <div class="side-deco" aria-hidden="true">${skyline('sd')}</div>
-    <div class="me"><b>${esc(perfil.nombre || session.user.email)}</b>${esc(label(perfil.rol))}<br><button id="logout">Salir</button></div></aside>
+    <div class="me"><b>${esc(perfil.nombre || session.user.email)}</b>${esc(label(perfil.rol))}<br><button id="logout">Salir</button><br><button id="biobtn" hidden style="margin-top:6px"></button></div></aside>
   <main class="main" id="main"></main></div><div class="deco-bottom" aria-hidden="true">${skyline('db')}</div>`;
   $('#burger').onclick = () => document.body.classList.toggle('nav-open');
   new MutationObserver(fitSoon).observe($('#main'), { childList: true, subtree: true });
   window.addEventListener('resize', fitSoon); document.fonts?.ready.then(fitSoon);
   $('#logout').onclick = async () => { await sb.auth.signOut(); location.hash = ''; showLogin(); };
   window.removeEventListener('hashchange', route); window.addEventListener('hashchange', route);
-  route();
+  route(); refreshBioBtn(); offerBio();
 }
 
 /* ================= acceso ================= */
@@ -3476,7 +3535,9 @@ async function init(cfgOverride) {
   sb = supabase.createClient(cfg.url, cfg.anonKey);
   const { data } = await sb.auth.getSession();
   if (!data.session) return showLogin();
-  session = data.session; enterApp();
+  session = data.session;
+  if (lsGet(bioKey(session.user.id)) && await bioSoportado()) return showBioGate();
+  enterApp();
 }
 init();
 </script>
