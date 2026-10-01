@@ -240,7 +240,8 @@ dialog::backdrop{background:rgba(24,34,40,.5)}
   .stat{padding:12px 10px 12px 0;margin-right:10px}
   .stat b{font-size:21px}
   .stat span{font-size:13px}
-  .tablewrap{border:0;background:transparent;overflow:visible}
+  .tablewrap:has(>table.cards){border:0;background:transparent;overflow:visible}
+  table.cards td.nocard{display:none}
   table.cards{display:block;background:transparent}
   table.cards thead{display:none}
   table.cards tbody,table.cards tfoot{display:block}
@@ -250,7 +251,8 @@ dialog::backdrop{background:rgba(24,34,40,.5)}
   table.cards td:empty{display:none}
   table.cards td:first-child{font-weight:700;font-size:16px;border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:3px}
   table.cards tfoot td{font-weight:600}
-  table.cards tfoot td::before{content:''}
+  table.cards tfoot td:first-child::before{content:none}
+  table.cards tfoot td{background:transparent}
   table.cards tr[data-id]:active{background:var(--accent-soft)}
   table.pivot{display:table}
   table.pivot thead{display:table-header-group}
@@ -260,6 +262,18 @@ dialog::backdrop{background:rgba(24,34,40,.5)}
   table.pivot td::before{content:none}
   details.mes-grp summary{line-height:1.5}
   dialog{width:100vw;max-width:100vw;margin:0}
+}
+.nav-overlay,.nav-close{display:none}
+@media (max-width:900px){
+  html,body{overflow-x:hidden}
+  .side{width:min(300px,86vw);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  body.nav-open .side{box-shadow:0 0 30px rgba(0,0,0,.4)}
+  .nav-overlay{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:19;opacity:0;pointer-events:none;transition:opacity .2s}
+  body.nav-open .nav-overlay{opacity:1;pointer-events:auto}
+  body.nav-open{overflow:hidden}
+  .nav-close{display:flex;position:absolute;top:10px;right:10px;width:44px;height:44px;align-items:center;justify-content:center;background:var(--side-2);color:#fff;border:0;border-radius:50%;font-size:22px;line-height:1;cursor:pointer;z-index:2}
+  .brand{padding-right:60px}
+  .topbar{position:sticky;top:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 /* decoración: máquinas viales, sutil y detrás del contenido */
@@ -724,7 +738,7 @@ function audFootHtml(row) {
 function tableHtml(cols, rows, { rowId = false, totals = null } = {}) {
   const head = cols.map(c => `<th class="${isNum(c) ? 'num' : ''}">${esc(c.l)}</th>`).join('');
   const body = rows.map(r => `<tr${rowId ? ` data-id="${esc(r.id)}" tabindex="0"` : ''}>${cols.map(c => `<td class="${isNum(c) ? 'num' : ''}" data-l="${esc(c.l)}">${cellHtml(c, r)}</td>`).join('')}</tr>`).join('');
-  const foot = totals ? `<tfoot><tr>${cols.map((c, i) => `<td class="${isNum(c) ? 'num' : ''}">${i === 0 ? 'Total' : (totals[c.l] !== undefined ? esc(totals[c.l]) : '')}</td>`).join('').replace(/<td class="([^"]*)">/g, (m, k) => `<td class="${k}">`)}</tr></tfoot>` : '';
+  const foot = totals ? `<tfoot><tr>${cols.map((c, i) => `<td class="${isNum(c) ? 'num' : ''}" data-l="${esc(c.l)}">${i === 0 ? 'Total' : (totals[c.l] !== undefined ? esc(totals[c.l]) : '')}</td>`).join('')}</tr></tfoot>` : '';
   return `<div class="tablewrap"><table class="cards"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table></div>`;
 }
 
@@ -3445,15 +3459,28 @@ function route() {
   location.hash = '#/inicio';
 }
 
+function cardify() {
+  document.querySelectorAll('#main .tablewrap > table:not(.cards):not(.pivot):not(.psheet)').forEach(t => {
+    if (t.closest('.aplic,.sheet')) return;
+    const hs = [...t.querySelectorAll('thead th')].map(h => h.textContent.trim()); if (!hs.length) return;
+    t.classList.add('cards');
+    t.querySelectorAll('tr').forEach(tr => [...tr.children].forEach((td, i) => { if (td.tagName === 'TD' && td.dataset.l === undefined) { td.dataset.l = hs[i] || ''; if (td.querySelector('.bar') && !td.textContent.trim()) td.classList.add('nocard'); } }));
+  });
+}
 function showShell() {
   $('#root').innerHTML = `<div class="topbar"><button id="burger" aria-label="Abrir menú">Menú</button><img src="${LOGO_DARK}" alt="CODES Construcciones"></div>
-  <div class="shell"><aside class="side"><div class="brand"><img src="${LOGO_DARK}" alt="CODES Construcciones"><span>Sistema de gestión</span></div>
+  <div class="nav-overlay" id="navov"></div><div class="shell"><aside class="side"><button class="nav-close" id="navx" aria-label="Cerrar menú" type="button">✕</button><div class="brand"><img src="${LOGO_DARK}" alt="CODES Construcciones"><span>Sistema de gestión</span></div>
     <nav class="nav" aria-label="Secciones">${NAV.filter(([g]) => !['Capital Humano', 'Administración'].includes(g) || perfil.rol === 'admin').map(([g, items]) => (g ? `<h3>${g}</h3>` : '') + items.map(([k, t]) => `<a href="#/${k}">${t}</a>`).join('')).join('')}</nav>
     <div class="side-deco" aria-hidden="true">${skyline('sd')}</div>
     <div class="me"><b>${esc(perfil.nombre || session.user.email)}</b>${esc(label(perfil.rol))}<br><button id="logout">Salir</button><br><button id="biobtn" hidden style="margin-top:6px"></button></div></aside>
   <main class="main" id="main"></main></div><div class="deco-bottom" aria-hidden="true">${skyline('db')}</div>`;
+  const cerrarMenu = () => document.body.classList.remove('nav-open');
   $('#burger').onclick = () => document.body.classList.toggle('nav-open');
-  new MutationObserver(fitSoon).observe($('#main'), { childList: true, subtree: true });
+  $('#navov').onclick = cerrarMenu; $('#navx').onclick = cerrarMenu;
+  document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', cerrarMenu));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarMenu(); });
+  { let x0 = null; const sd = $('.side'); sd.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true }); sd.addEventListener('touchend', e => { if (x0 !== null && e.changedTouches[0].clientX - x0 < -60) cerrarMenu(); x0 = null; }, { passive: true }); }
+  new MutationObserver(() => { cardify(); fitSoon(); }).observe($('#main'), { childList: true, subtree: true });
   window.addEventListener('resize', fitSoon); document.fonts?.ready.then(fitSoon);
   $('#logout').onclick = async () => { await sb.auth.signOut(); location.hash = ''; showLogin(); };
   window.removeEventListener('hashchange', route); window.addEventListener('hashchange', route);
